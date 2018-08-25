@@ -6,6 +6,9 @@ TODO 设定整体的背景颜色
 TODO 美化页面布局
 '''
 import sys
+import serial
+import struct
+import time
 import math
 import tkinter as tk
 import matplotlib
@@ -30,6 +33,15 @@ root_width = 1000 # 窗口的宽度
 target_value = 0 # 目标值
 
 matplotlib.use('TkAgg')
+
+'''
+初始化串口通信相关
+'''
+# 串口号 默认为 /dev/ttyUSB0
+ser_dev = '/dev/ttyUSB1'
+# 创建一个串口实例
+ser = serial.Serial(ser_dev, 115200, timeout=1, bytesize=8)
+
 
 # tkinter组件
 root = tk.Tk()
@@ -61,12 +73,18 @@ target_input.pack(side=tk.LEFT)
 
 # 设定目标值按钮
 def set_target():
-    # TODO 设定目标值， 串口发送指令
+    # TODO 对input的值进行检测
     global target_value
     global target_input
-    # 更新target 取值
-    target_value = target_input.get()
-    pass
+    try:
+        target_value = float(target_input.get())
+    except ValueError:
+        print('[ERROR] 非法的目标值设定, 只能是浮点数')
+
+    data_str = ','.join(['SET_TARGET', str(target_value)])
+    data_str += '\n' # 添加换行符号
+    data_byte = data_str.encode('utf-8')
+    ser.write(data_byte)
 
 button =tk.Button(master=target_set_frame, text='设定目标值', command=set_target, width=10, height=2, font=('Arial', 12))
 button.pack(side=tk.RIGHT)
@@ -80,25 +98,30 @@ def update_pid_info():
     global kp
     global ki
     global kd
-    global l
-    pid_info_label.config(text='KP=-{} ,  KI=-{} ,  KD = -{}'.format(kp, ki, kd))
-    # TODO 通过串口发送新的KP KI KD
-    # TODO 通信协议确定 
+    global pid_info_label
+    global ser
+
+    pid_info_label.config(text='KP={} ,  KI={} ,  KD = {}'.format(kp, ki, kd))
+    data_str = ','.join(['SET_PID', str(kp), str(ki) , str(kd)])
+    data_str += '\n' # 添加换行符号
+    data_byte = data_str.encode('utf-8')
+    ser.write(data_byte)
 
 # 回调函数 更新PID参数
 def update_kp(new_pd):
     global kp
-    kp = new_pd
+    kp = -1 * float(new_pd)
+    print(kp)
     update_pid_info()
 
 def update_ki(new_pi):
     global ki
-    ki = new_pi
+    ki = -1 * float(new_pi)
     update_pid_info()
 
 def update_kd(new_pd):
     global kd
-    kd = new_pd
+    kd = -1 * float(new_pd)
     update_pid_info()
 
 # 显示PID信息的Label
@@ -106,33 +129,49 @@ pid_info_label = tk.Label(left_frame, bg='LightCyan', width=50, height=3, text='
 pid_info_label.pack()
 
 # KP 滑动条
-kp_scale = tk.Scale(right_frame, label='KP', from_=0, to=50, orient=tk.HORIZONTAL,
-             length=500, showvalue=0, tickinterval=10, resolution=0.01, command=update_kp)
+kp_scale = tk.Scale(right_frame, label='KP', from_=0, to=15, orient=tk.HORIZONTAL,
+             length=500, showvalue=0, tickinterval=3, resolution=0.01, command=update_kp)
 kp_scale.pack()
 # KI 滑动条
-ki_scale = tk.Scale(right_frame, label='KI', from_=0, to=50, orient=tk.HORIZONTAL,
-             length=500, showvalue=0, tickinterval=10, resolution=0.01, command=update_ki)
+ki_scale = tk.Scale(right_frame, label='KI', from_=0, to=5, orient=tk.HORIZONTAL,
+             length=500, showvalue=0, tickinterval=1, resolution=0.01, command=update_ki)
 ki_scale.pack()
 # KD 滑动条
-kd_scale = tk.Scale(right_frame, label='KD', from_=0, to=50, orient=tk.HORIZONTAL,
-             length=500, showvalue=0, tickinterval=10, resolution=0.01, command=update_kd)
+kd_scale = tk.Scale(right_frame, label='KD', from_=0, to=10, orient=tk.HORIZONTAL,
+             length=500, showvalue=0, tickinterval=2, resolution=0.01, command=update_kd)
 kd_scale.pack()
 
-
-# 更新图像
-# 每隔0.05s执行一次
-def update_figure():
+def update_real_value(new_real_value):
     global canvas
     global bottom_frame
+
+    # 更新实际值，并更新画面
+    print('update real value {}'.format(new_real_value))
+
+def cmd_process(data_str):
+    cmd_list = {
+        'REAL_VALUE': update_real_value
+    }
+
+    params = data_str.split(',')
+    cmd_name = params[0]
+    if cmd_name in cmd_list:
+        cmd_list[cmd_name](*params[1:])
+    else:
+        print("[ERROR] 非法指令 {}".format(cmd_name))
+
+# 定时器回调
+# 每隔0.05s执行一次
+def timer_callback():
+    global ser
     # 串口接收数据
-    print('update figure')
-    # 解析数据
+    while ser.in_waiting:
+        # 判断串口是不是有数据读进来
+        data_byte = ser.readline()
+        data_str = data_byte.decode('utf-8')
+        cmd_process(data_str)
 
-    # 动态绘制在Canvas上面
-
-    bottom_frame.after(1, update_figure)
-    # timer = threading.Timer(0.05, update_figure)
-    # timer.start()
+    bottom_frame.after(1, timer_callback)
 
 # 设置图形尺寸与质量
 figure = Figure(figsize=(10,4), dpi=100)
@@ -150,23 +189,9 @@ toolbar = NavigationToolbar2TkAgg(canvas, bottom_frame)
 toolbar.update()
 canvas._tkcanvas.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=1)
 
-bottom_frame.after(1, update_figure)
+# 执行定时器
+bottom_frame.after(1, timer_callback)
 
-'''
-按钮
-'''
-# def _quit():
-#     # 结束事件主循环，销毁应用程序窗口
-#     root._quit()
-#     root.destroy()
-#     exit(0)
-
-# button =tk.Button(master=root, text='退出', command=_quit)
-# button.pack(side=tk.BOTTOM)
-
-# 定时器 0.01s （10ms）执行一次，
-# timer = threading.Timer(0.01, update_figure)
-# timer.start()
 
 # 程序主循环
 root.mainloop()
