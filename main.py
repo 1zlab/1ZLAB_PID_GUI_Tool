@@ -4,6 +4,9 @@ PID调参小工具 Python - tkinter
 
 TODO 设定整体的背景颜色
 TODO 美化页面布局
+TODO 纵轴的取值范围问题
+TODO Target值 中间画一条红线
+TODO Y轴随着Target取值范围取
 '''
 import sys
 import serial
@@ -25,9 +28,8 @@ kp = 0
 ki = 0
 kd = 0
 
-time_set = np.array([0]) # x轴数据，时间点
-real_value_set = np.array([0]) # Y轴数据，实际值的集合
-root_width = 1000 # 窗口的宽度
+real_value_set = [] # Y轴数据，实际值的集合
+canvas_time_width = 100 # 窗口的宽度
 
 
 target_value = 0 # 目标值
@@ -46,7 +48,7 @@ ser = serial.Serial(ser_dev, 115200, timeout=1, bytesize=8)
 # tkinter组件
 root = tk.Tk()
 root.title('PID调参小工具-1Z实验室(1zlab.com)')
-root.geometry('1000x600')
+root.geometry('600x400')
 
 pid_info_label = tk.Label(root, width=50, height=3, text='PID调参小工具-1Z实验室', font=('Arial', 15))
 pid_info_label.pack(side = tk.TOP)
@@ -111,7 +113,6 @@ def update_pid_info():
 def update_kp(new_pd):
     global kp
     kp = -1 * float(new_pd)
-    print(kp)
     update_pid_info()
 
 def update_ki(new_pi):
@@ -144,9 +145,19 @@ kd_scale.pack()
 def update_real_value(new_real_value):
     global canvas
     global bottom_frame
+    global figure
+    global real_value_set # Y轴数据，实际值的集合
+    global canvas_time_width # 窗口的宽度
 
+    new_real_value = float(new_real_value)
     # 更新实际值，并更新画面
     print('update real value {}'.format(new_real_value))
+    real_value_set.append(new_real_value)
+    
+    while len(real_value_set) > canvas_time_width:
+        real_value_set.pop(0)
+    
+    
 
 def cmd_process(data_str):
     cmd_list = {
@@ -164,20 +175,46 @@ def cmd_process(data_str):
 # 每隔0.05s执行一次
 def timer_callback():
     global ser
+    global canvas
+    global figure
+    global target_input
+
     # 串口接收数据
     while ser.in_waiting:
         # 判断串口是不是有数据读进来
         data_byte = ser.readline()
         data_str = data_byte.decode('utf-8')
+        print('RECIEVE')
+        print(data_str)
         cmd_process(data_str)
 
+    if len(target_input.get()) == 0:
+        target = 0
+    else:
+        target = float(target_input.get())
+
+    # 更新图像
+    figure.clf()
+    axes = figure.add_subplot(111)
+    axes.set_xlim(0, canvas_time_width)
+    axes.set_xticks([])
+    axes.set_ylim(-180 + target, target+180)
+    axes.set_yticks([-180 + target, target, target+180])
+
+    
+
+    #绘制图形
+    axes.plot(np.arange(0,len(real_value_set)), np.array(real_value_set))
+    axes.plot([0, 100], [target, target], color='red')
+    canvas.draw()
+    # 100ms 更新一次
     bottom_frame.after(1, timer_callback)
 
 # 设置图形尺寸与质量
 figure = Figure(figsize=(10,4), dpi=100)
 axes = figure.add_subplot(111)
 # 绘制图形
-axes.plot(time_set, real_value_set)
+axes.plot(np.arange(len(real_value_set)), real_value_set)
 
 # 把绘制的图形显示到tkinter窗口上
 canvas = FigureCanvasTkAgg(figure, master=bottom_frame)
